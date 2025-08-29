@@ -7,6 +7,10 @@ import subprocess
 from pathlib import Path
 from tqdm import tqdm
 
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+os.environ["KAGGLE_CONFIG_DIR"] = script_dir
+
 try:
     from kaggle.api.kaggle_api_extended import KaggleApi
     _HAS_KAGGLE = True
