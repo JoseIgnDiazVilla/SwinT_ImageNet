@@ -4,7 +4,7 @@ Training of Swin Transformer models on ImageNEt using the Monai library
 
 ## Installation
 
-Make sure Kaggle credential are at ~/.kaggle/kaggle.json
+Make sure Kaggle credentials are at ~/.kaggle/kaggle.json
 
 ```bash
 python3 -m venv .venv
