@@ -7,8 +7,8 @@ Training of Swin Transformer models on ImageNEt using the Monai library
 Make sure Kaggle credentials are at ~/.kaggle/kaggle.json
 
 ```bash
-python3 -m venv SwinIN
-source SwinIN/bin/activate
+python3 -m venv SwinIN_env
+source SwinIN_env/bin/activate
 pip install -r requirements.txt
 
 python prepare_data.py --competition imagenet-object-localization-challenge --dest /data/imagenet --keep-archives
