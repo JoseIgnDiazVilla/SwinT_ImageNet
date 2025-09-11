@@ -672,7 +672,7 @@ class SwinTransformer(nn.Module):
         norm_layer: type[LayerNorm] = nn.LayerNorm,
         patch_norm: bool = False,
         use_checkpoint: bool = False,
-        spatial_dims: int = 3,
+        spatial_dims: int = 2,
         downsample="merging",
         use_v2=False,
     ) -> None:
