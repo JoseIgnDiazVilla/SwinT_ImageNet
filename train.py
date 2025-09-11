@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 import shutil
 import xml.etree.ElementTree as ET
-
+from PIL import Image
 
 import torch
 import torch.nn as nn
@@ -157,52 +157,84 @@ class RandomMultiScaleResize:
 # Build dataloaders
 # ----------------------------
 
-def prepare_ilsvrc_paths(ilsvrc_root: Path):
-    """
-    Given the ILSVRC root Path (the folder named 'ILSVRC' in your find output),
-    return (train_dir, val_dir, ann_dir) for:
-      train -> ILSVRC/Data/CLS-LOC/train
-      val   -> ILSVRC/Data/CLS-LOC/val
-      ann   -> ILSVRC/Annotations/CLS-LOC (or ILSVRC/Annotations/CLS-LOC/val)
-    Raises ValueError if expected structure not found.
-    """
-    il = Path(ilsvrc_root)
-    data_cls_loc = il / "Data" / "CLS-LOC"
-    ann_cls_loc = il / "Annotations" / "CLS-LOC"
+class ImageFilesFromList(torch.utils.data.Dataset):
+    def __init__(self, root, entries, transform=None, exts=(".JPEG", ".jpg", ".jpeg", ".png")):
+        self.root = Path(root)
+        self.entries = entries
+        self.transform = transform
+        self.exts = exts
 
-    train_dir = data_cls_loc / "train"
-    val_dir = data_cls_loc / "val"
+    def __len__(self):
+        return len(self.entries)
 
-    if not train_dir.exists():
-        raise ValueError(f"Train dir not found: {train_dir}")
-    if not val_dir.exists():
-        raise ValueError(f"Val dir not found: {val_dir}")
-    if not ann_cls_loc.exists():
-        # sometimes annotations for val are under Annotations/CLS-LOC/val
-        if (il / "Annotations" / "CLS-LOC" / "val").exists():
-            ann_cls_loc = il / "Annotations" / "CLS-LOC" / "val"
-        else:
-            raise ValueError(f"Annotations dir not found: {ann_cls_loc}")
+    def _find_file(self, rel_no_ext):
+        for ext in self.exts:
+            p = self.root / (rel_no_ext + ext)
+            if p.exists():
+                return p
+        glob_match = list(self.root.rglob(rel_no_ext + ".*"))
+        if glob_match:
+            return glob_match[0]
+        raise FileNotFoundError(f"No file found for {rel_no_ext} under {self.root}")
 
-    return train_dir, val_dir, ann_cls_loc
+    def __getitem__(self, idx):
+        rel_no_ext, label = self.entries[idx]
+        img_path = self._find_file(rel_no_ext)
+        img = Image.open(img_path).convert("RGB")
+        if self.transform:
+            img = self.transform(img)
+        return img, int(label)
+    
+def parse_train_cls_list(path):
+    entries = []
+    labels_seen = set()
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            relpath = parts[0]  # e.g. 'n01440764/n01440764_10026'
+            label = int(parts[1])
+            # ImageSets labels are typically 1-based -> convert to 0-based for PyTorch
+            label0 = label - 1
+            # If your files are already 0-based, change to: label0 = label
+            entries.append((relpath, label0))
+            labels_seen.add(label0)
+    return entries, labels_seen
+
+def parse_val_list(path):
+    entries = []
+    labels_seen = set()
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            imgname = parts[0]  # e.g. 'ILSVRC2012_val_00000001'
+            label = int(parts[1])
+            # convert to 0-based
+            label0 = label - 1
+            # If your files are already 0-based, change to: label0 = label
+            entries.append((imgname, label0))
+            labels_seen.add(label0)
+    return entries, labels_seen
 
 def build_dataloaders(data_dir, input_size=224, batch_size=256, num_workers=8,
                       multiscale_scales=(224, 256, 288), augment=True):
-    """
-    Expects `data_dir` to be the path to the ILSVRC folder (the folder you showed in your find output).
-    It will use:
-      data_dir/Data/CLS-LOC/train
-      data_dir/Data/CLS-LOC/val
-      data_dir/Annotations/CLS-LOC/*.xml
-    If val is flat, it creates data_dir/val_by_class with symlinks and uses that for validation.
-    Returns: train_loader, val_loader, num_classes
-    """
     data_dir = Path(data_dir)
 
-    # locate expected ILSVRC paths
-    train_dir, val_dir, ann_dir = prepare_ilsvrc_paths(data_dir)
+    train_list_file = data_dir / "ImageSets" / "CLS-LOC" / "train_cls.txt"
+    val_list_file = data_dir / "ImageSets" / "CLS-LOC" / "val.txt"
 
-    # transforms (reuse RandomMultiScaleResize defined earlier in your script)
+    train_root = data_dir / "Data" / "CLS-LOC" / "train"
+    val_root = data_dir / "Data" / "CLS-LOC" / "val"
+
     if augment:
         train_transform = transforms.Compose([
             RandomMultiScaleResize(scales=multiscale_scales),
@@ -220,6 +252,7 @@ def build_dataloaders(data_dir, input_size=224, batch_size=256, num_workers=8,
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
         ])
+
     val_transform = transforms.Compose([
         transforms.Resize(int(input_size * 256 / 224)),
         transforms.CenterCrop(input_size),
@@ -228,16 +261,30 @@ def build_dataloaders(data_dir, input_size=224, batch_size=256, num_workers=8,
                              std=[0.229, 0.224, 0.225]),
     ])
 
-    # ImageFolder datasets
-    train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
-    val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
+    if not train_list_file.exists():
+        raise FileNotFoundError(f"Train list not found: {train_list_file}")
+    if not val_list_file.exists():
+        raise FileNotFoundError(f"Val list not found: {val_list_file}")
+
+    train_entries, train_labels = parse_train_cls_list(train_list_file)
+    val_entries, val_labels = parse_val_list(val_list_file)
+
+    # Use only the labels indicated in the .txt files (union of train and val)
+    labels_union = train_labels.union(val_labels)
+    if not labels_union:
+        raise RuntimeError("No labels found in train/val lists.")
+    num_classes = max(labels_union) + 1  # labels are 0-based already (after -1 conversion)
+
+    # Build datasets
+    train_dataset = ImageFilesFromList(train_root, train_entries, transform=train_transform)
+    val_dataset = ImageFilesFromList(val_root, val_entries, transform=val_transform)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True)
 
-    return train_loader, val_loader, len(train_dataset.classes)
+    return train_loader, val_loader, num_classes
 
 # ----------------------------
 # Training / validation loops
