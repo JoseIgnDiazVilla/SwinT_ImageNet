@@ -8,3 +8,5 @@ tqdm
 scikit-learn
 matplotlib
 pillow
+tqdm
+kaggle

@@ -26,6 +26,9 @@ import math
 import os
 import time
 from pathlib import Path
+import shutil
+import xml.etree.ElementTree as ET
+
 
 import torch
 import torch.nn as nn
@@ -153,12 +156,53 @@ class RandomMultiScaleResize:
 # ----------------------------
 # Build dataloaders
 # ----------------------------
+
+def prepare_ilsvrc_paths(ilsvrc_root: Path):
+    """
+    Given the ILSVRC root Path (the folder named 'ILSVRC' in your find output),
+    return (train_dir, val_dir, ann_dir) for:
+      train -> ILSVRC/Data/CLS-LOC/train
+      val   -> ILSVRC/Data/CLS-LOC/val
+      ann   -> ILSVRC/Annotations/CLS-LOC (or ILSVRC/Annotations/CLS-LOC/val)
+    Raises ValueError if expected structure not found.
+    """
+    il = Path(ilsvrc_root)
+    data_cls_loc = il / "Data" / "CLS-LOC"
+    ann_cls_loc = il / "Annotations" / "CLS-LOC"
+
+    train_dir = data_cls_loc / "train"
+    val_dir = data_cls_loc / "val"
+
+    if not train_dir.exists():
+        raise ValueError(f"Train dir not found: {train_dir}")
+    if not val_dir.exists():
+        raise ValueError(f"Val dir not found: {val_dir}")
+    if not ann_cls_loc.exists():
+        # sometimes annotations for val are under Annotations/CLS-LOC/val
+        if (il / "Annotations" / "CLS-LOC" / "val").exists():
+            ann_cls_loc = il / "Annotations" / "CLS-LOC" / "val"
+        else:
+            raise ValueError(f"Annotations dir not found: {ann_cls_loc}")
+
+    return train_dir, val_dir, ann_cls_loc
+
 def build_dataloaders(data_dir, input_size=224, batch_size=256, num_workers=8,
                       multiscale_scales=(224, 256, 288), augment=True):
+    """
+    Expects `data_dir` to be the path to the ILSVRC folder (the folder you showed in your find output).
+    It will use:
+      data_dir/Data/CLS-LOC/train
+      data_dir/Data/CLS-LOC/val
+      data_dir/Annotations/CLS-LOC/*.xml
+    If val is flat, it creates data_dir/val_by_class with symlinks and uses that for validation.
+    Returns: train_loader, val_loader, num_classes
+    """
     data_dir = Path(data_dir)
-    train_dir = data_dir / "train"
-    val_dir = data_dir / "val"
 
+    # locate expected ILSVRC paths
+    train_dir, val_dir, ann_dir = prepare_ilsvrc_paths(data_dir)
+
+    # transforms (reuse RandomMultiScaleResize defined earlier in your script)
     if augment:
         train_transform = transforms.Compose([
             RandomMultiScaleResize(scales=multiscale_scales),
@@ -184,6 +228,7 @@ def build_dataloaders(data_dir, input_size=224, batch_size=256, num_workers=8,
                              std=[0.229, 0.224, 0.225]),
     ])
 
+    # ImageFolder datasets
     train_dataset = datasets.ImageFolder(train_dir, transform=train_transform)
     val_dataset = datasets.ImageFolder(val_dir, transform=val_transform)
 
