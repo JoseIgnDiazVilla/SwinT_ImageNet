@@ -1,6 +1,6 @@
-from typing import Sequence, Optional
-
 from __future__ import annotations
+
+from typing import Sequence, Optional
 
 import itertools
 from collections.abc import Sequence
